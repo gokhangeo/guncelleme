@@ -1,466 +1,307 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gören Bot AI v6 - Iron Man</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, Camera, Download, X, Move, RotateCw, ZoomIn, Shirt, Layers, Sparkles, Scissors } from 'lucide-react';
+
+export default function App() {
+  // Durum yönetimi (State)
+  const [baseImage, setBaseImage] = useState(null);
+  const [overlays, setOverlays] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  
+  // Canvas referansı
+  const containerRef = useRef(null);
+
+  // Örnek kıyafet/aksesuar veritabanı (SVG Placeholderlar)
+  const defaultItems = [
+    { type: 'sunglasses', label: 'Güneş Gözlüğü', icon: '🕶️' },
+    { type: 'hat', label: 'Şapka', icon: '🧢' },
+    { type: 'shirt', label: 'Tişört', icon: '👕' },
+    { type: 'necklace', label: 'Kolye', icon: '📿' },
+  ];
+
+  // Resim Yükleme
+  const handleImageUpload = (e, type) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (type === 'base') {
+          setBaseImage(event.target.result);
+        } else {
+          addOverlay(event.target.result, 'custom');
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Katman Ekleme
+  const addOverlay = (src, type) => {
+    const newOverlay = {
+      id: Date.now(),
+      src: src,
+      type: type,
+      x: 50, // Başlangıç X (yüzde)
+      y: 50, // Başlangıç Y (yüzde)
+      scale: 1,
+      rotation: 0,
+    };
+    setOverlays([...overlays, newOverlay]);
+    setSelectedId(newOverlay.id);
+  };
+
+  // SVG oluşturucu (Demo amaçlı placeholder görseller)
+  const createSvgUrl = (emoji) => {
+    const svgString = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="80">${emoji}</text>
+      </svg>
+    `;
+    return `data:image/svg+xml;base64,${btoa(decodeURIComponent(encodeURIComponent(svgString)))}`;
+  };
+
+  // Seçili öğeyi güncelleme
+  const updateSelected = (prop, value) => {
+    setOverlays(overlays.map(item => 
+      item.id === selectedId ? { ...item, [prop]: value } : item
+    ));
+  };
+
+  // Sürükleme Mantığı
+  const handleMouseDown = (e, id) => {
+    e.stopPropagation();
+    setSelectedId(id);
+    setIsDragging(true);
     
-    <!-- TensorFlow.js Çekirdek -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    const item = overlays.find(o => o.id === id);
+    const containerRect = containerRef.current.getBoundingClientRect();
     
-    <!-- Modeller -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script> 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+    // Mouse pozisyonunu yüzdeye çevir
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-    <style>
-        body {
-            background-color: #000;
-            color: #0f0;
-            font-family: 'Courier New', Courier, monospace;
-            overflow: hidden;
-            margin: 0;
-            touch-action: manipulation;
-            user-select: none;
-        }
+    setDragOffset({
+      x: clientX - (containerRect.left + (containerRect.width * item.x / 100)),
+      y: clientY - (containerRect.top + (containerRect.height * item.y / 100))
+    });
+  };
 
-        #camContainer { position: relative; width: 100vw; height: 100vh; }
-        /* Video ve Canvas üst üste tam oturmalı */
-        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
+  const handleMouseMove = (e) => {
+    if (!isDragging || !selectedId) return;
 
-        /* HUD Katmanları */
-        .hud-overlay {
-            position: absolute; z-index: 10; pointer-events: none; inset: 0;
-            border: 2px solid rgba(0, 255, 0, 0.3);
-            box-shadow: inset 0 0 50px rgba(0, 255, 0, 0.2);
-            transition: all 0.5s;
-        }
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-        .scan-line {
-            width: 100%; height: 2px; background: rgba(0, 255, 0, 0.5);
-            position: absolute; animation: scan 3s linear infinite;
-        }
-        @keyframes scan { 0% { top: 0%; opacity: 0; } 50% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
+    // Yeni pozisyonu hesapla (yüzde olarak)
+    let newX = ((clientX - dragOffset.x) - containerRect.left) / containerRect.width * 100;
+    let newY = ((clientY - dragOffset.y) - containerRect.top) / containerRect.height * 100;
 
-        /* Kamera Çevirme Butonu (YENİ) */
-        #switchCamBtn {
-            position: absolute; top: 20px; right: 20px; z-index: 40;
-            background: rgba(0, 20, 0, 0.8); color: #0f0; border: 1px solid #0f0;
-            width: 44px; height: 44px; border-radius: 50%; display: flex;
-            align-items: center; justify-content: center; cursor: pointer;
-            box-shadow: 0 0 15px #0f0; transition: transform 0.2s;
-        }
-        #switchCamBtn:active { transform: scale(0.9); }
+    setOverlays(overlays.map(item => 
+      item.id === selectedId ? { ...item, x: newX, y: newY } : item
+    ));
+  };
 
-        /* Mod Seçici */
-        .mode-selector {
-            position: absolute; top: 80px; left: 50%; transform: translateX(-50%);
-            z-index: 30; display: flex; gap: 8px; background: rgba(0, 0, 0, 0.7);
-            padding: 5px; border-radius: 20px; border: 1px solid #333;
-            white-space: nowrap; overflow-x: auto; max-width: 90%;
-        }
-        .mode-selector::-webkit-scrollbar { display: none; }
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
 
-        .mode-btn {
-            padding: 8px 12px; border-radius: 15px; font-size: 10px; font-weight: bold;
-            color: white; border: 1px solid transparent; transition: all 0.3s; flex-shrink: 0;
-        }
-        .mode-btn.active { background: rgba(0, 255, 0, 0.3); border-color: #0f0; box-shadow: 0 0 10px #0f0; }
+  // Klavye ile silme
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Delete' && selectedId) {
+        setOverlays(overlays.filter(o => o.id !== selectedId));
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedId, overlays]);
 
-        /* Renk Temaları */
-        .crypto-hud { border-color: gold; color: gold; } .crypto-hud .scan-line { background: gold; }
-        .emotion-hud { border-color: cyan; color: cyan; } .emotion-hud .scan-line { background: cyan; }
-        .road-hud { border-color: red; color: red; } .road-hud .scan-line { display: none; }
-        .grain-hud { border-color: magenta; color: magenta; } .grain-hud .scan-line { display: none; }
-
-        /* Paneller */
-        #speedometer, #grainControls {
-            position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);
-            z-index: 25; display: none; text-align: center;
-        }
-        .speed-val { font-size: 80px; font-weight: bold; color: red; line-height: 1; text-shadow: 0 0 10px red; }
-        
-        #grainControls { width: 80%; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 10px; border: 1px solid magenta; }
-        input[type=range] { width: 100%; accent-color: magenta; }
-
-        .info-panel {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            background: rgba(0, 20, 0, 0.9); padding: 15px; border: 1px solid #0f0;
-            border-radius: 12px; text-align: center; z-index: 20; width: 90%;
-            pointer-events: auto; backdrop-filter: blur(4px);
-        }
-
-        .loading-overlay {
-            position: fixed; inset: 0; background: black; z-index: 50;
-            display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
-        }
-    </style>
-</head>
-<body>
-
-    <div id="loadingScreen" class="loading-overlay">
-        <div class="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <h1 class="text-xl font-bold text-green-500">SİSTEM BAŞLATILIYOR...</h1>
-        <p class="text-xs text-green-800 mt-2" id="loadingText">Kamera Hazırlanıyor</p>
-    </div>
-
-    <div id="camContainer">
-        <video id="video" playsinline muted autoplay></video>
-        <canvas id="canvas"></canvas>
-        
-        <!-- Kamera Değiştir Butonu -->
-        <button id="switchCamBtn" onclick="switchCamera()">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
+  return (
+    <div 
+      className="flex flex-col h-screen bg-slate-900 text-white font-sans"
+      onMouseMove={handleMouseMove}
+      onTouchMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onTouchEnd={handleMouseUp}
+    >
+      {/* Header */}
+      <header className="bg-slate-950 p-4 border-b border-slate-800 flex justify-between items-center shadow-lg z-20">
+        <div className="flex items-center gap-2">
+          <div className="bg-indigo-600 p-2 rounded-lg">
+            <Sparkles className="w-6 h-6 text-white" />
+          </div>
+          <h1 className="text-xl font-bold tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400">
+            MODA AI STÜDYOSU
+          </h1>
+        </div>
+        <button className="bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-full text-sm font-medium transition flex items-center gap-2">
+          <Download size={16} /> Kaydet
         </button>
+      </header>
 
-        <div class="mode-selector">
-            <button onclick="setMode('object')" id="btn-object" class="mode-btn active">NESNE</button>
-            <button onclick="setMode('emotion')" id="btn-emotion" class="mode-btn">YÜZ (AR)</button>
-            <button onclick="setMode('grain')" id="btn-grain" class="mode-btn">TANE SAYAR</button>
-            <button onclick="setMode('road')" id="btn-road" class="mode-btn">YOL (HUD)</button>
-            <button onclick="setMode('crypto')" id="btn-crypto" class="mode-btn">KRİPTO</button>
-        </div>
+      <main className="flex-1 flex overflow-hidden">
+        {/* Sol Panel: Araçlar */}
+        <aside className="w-64 bg-slate-900 border-r border-slate-800 p-4 flex flex-col gap-6 overflow-y-auto z-10 shadow-xl">
+          
+          {/* Ana Resim Yükleme */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Model</h3>
+            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-700 rounded-xl hover:border-indigo-500 hover:bg-slate-800 transition cursor-pointer group">
+              <Camera className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 mb-2" />
+              <span className="text-xs text-slate-400 group-hover:text-white">Fotoğraf Yükle</span>
+              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'base')} />
+            </label>
+          </div>
 
-        <div id="hud" class="hud-overlay">
-            <div class="absolute top-4 left-4 text-xs font-bold tracking-widest">SYS: ONLINE</div>
-            <div class="scan-line"></div>
-            
-            <div id="speedometer">
-                <div class="speed-val" id="speedVal">0</div><div class="text-xl text-red-500">KM/H</div>
+          {/* Gardırop */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Gardırop</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {defaultItems.map((item, idx) => (
+                <button 
+                  key={idx}
+                  onClick={() => addOverlay(createSvgUrl(item.icon), 'preset')}
+                  className="bg-slate-800 hover:bg-slate-700 p-3 rounded-lg flex flex-col items-center gap-2 transition border border-slate-700 hover:border-indigo-500"
+                >
+                  <div className="text-2xl">{item.icon}</div>
+                  <span className="text-[10px] text-slate-300">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Özel Kıyafet Yükleme */}
+          <div className="space-y-2">
+             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Kendi Kıyafetin</h3>
+             <label className="flex items-center justify-center gap-2 w-full py-3 bg-slate-800 rounded-lg cursor-pointer hover:bg-slate-700 border border-slate-700 transition">
+                <Upload size={16} className="text-indigo-400"/>
+                <span className="text-xs">PNG Yükle</span>
+                <input type="file" className="hidden" accept="image/png,image/jpeg" onChange={(e) => handleImageUpload(e, 'overlay')} />
+             </label>
+          </div>
+        </aside>
+
+        {/* Orta Alan: Canvas */}
+        <section className="flex-1 bg-[#0f172a] relative overflow-hidden flex items-center justify-center p-8">
+          <div 
+            className="relative w-full h-full max-w-2xl max-h-[80vh] bg-slate-950 rounded-lg shadow-2xl overflow-hidden flex items-center justify-center border border-slate-800 select-none"
+            ref={containerRef}
+          >
+            {baseImage ? (
+              <img 
+                src={baseImage} 
+                alt="Base" 
+                className="absolute w-full h-full object-contain pointer-events-none"
+              />
+            ) : (
+              <div className="text-center p-10">
+                <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                   <Camera className="w-10 h-10 text-slate-600" />
+                </div>
+                <p className="text-slate-500 text-lg">Başlamak için bir fotoğraf yükleyin</p>
+              </div>
+            )}
+
+            {/* Katmanlar */}
+            {overlays.map((item) => (
+              <div
+                key={item.id}
+                onMouseDown={(e) => handleMouseDown(e, item.id)}
+                onTouchStart={(e) => handleMouseDown(e, item.id)}
+                style={{
+                  position: 'absolute',
+                  left: `${item.x}%`,
+                  top: `${item.y}%`,
+                  transform: `translate(-50%, -50%) scale(${item.scale}) rotate(${item.rotation}deg)`,
+                  cursor: isDragging && selectedId === item.id ? 'grabbing' : 'grab',
+                  zIndex: selectedId === item.id ? 50 : 10,
+                }}
+                className={`group ${selectedId === item.id ? 'ring-2 ring-indigo-500 rounded-lg' : ''}`}
+              >
+                <img 
+                  src={item.src} 
+                  alt="Overlay" 
+                  className="pointer-events-none max-w-[200px] max-h-[200px]" 
+                  style={{ filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }}
+                />
+                
+                {selectedId === item.id && (
+                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition">
+                    Taşı
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Sağ Panel: Kontrol */}
+        {selectedId ? (
+          <aside className="w-72 bg-slate-900 border-l border-slate-800 p-6 flex flex-col gap-6 z-10 shadow-xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+              <h2 className="font-bold text-indigo-400 flex items-center gap-2">
+                <Layers size={18} />
+                Düzenle
+              </h2>
+              <button 
+                onClick={() => {
+                  setOverlays(overlays.filter(o => o.id !== selectedId));
+                  setSelectedId(null);
+                }}
+                className="text-red-400 hover:text-red-300 transition"
+              >
+                <Scissors size={18} />
+              </button>
             </div>
 
-            <div id="grainControls">
-                <div class="text-xs text-white mb-1">HASSASİYET: <span id="threshVal">100</span></div>
-                <input type="range" min="0" max="255" value="100" oninput="updateThreshold(this.value)">
+            <div className="space-y-6">
+              {/* Büyütme */}
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1"><ZoomIn size={12}/> Boyut</span>
+                  <span>{overlays.find(o => o.id === selectedId).scale.toFixed(1)}x</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="0.1" 
+                  max="3" 
+                  step="0.1" 
+                  value={overlays.find(o => o.id === selectedId).scale}
+                  onChange={(e) => updateSelected('scale', parseFloat(e.target.value))}
+                  className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+
+              {/* Döndürme */}
+              <div className="space-y-2">
+                 <div className="flex justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1"><RotateCw size={12}/> Döndür</span>
+                  <span>{overlays.find(o => o.id === selectedId).rotation}°</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="360" 
+                  value={overlays.find(o => o.id === selectedId).rotation}
+                  onChange={(e) => updateSelected('rotation', parseInt(e.target.value))}
+                  className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                />
+              </div>
             </div>
 
-            <div id="crosshair" class="absolute top-1/2 left-1/2 w-24 h-24 border-2 border-white/30 -translate-x-1/2 -translate-y-1/2 rounded-lg transition-all duration-200">
-                <div class="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-white"></div>
-                <div class="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-white"></div>
-                <div class="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-white"></div>
-                <div class="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-white"></div>
+            <div className="mt-auto p-4 bg-slate-800 rounded-lg text-xs text-slate-400 leading-relaxed">
+              <p>💡 <strong>İpucu:</strong> Kıyafeti hareket ettirmek için üzerine basılı tut ve sürükle.</p>
             </div>
-        </div>
-
-        <div class="info-panel" id="infoPanel">
-            <div id="mainText" class="font-bold text-lg mb-1 text-green-400">SİSTEM HAZIR</div>
-            <div id="subText" class="text-xs text-gray-400">Mod seçimi bekleniyor...</div>
-        </div>
+          </aside>
+        ) : (
+          <aside className="w-72 bg-slate-900 border-l border-slate-800 flex items-center justify-center text-slate-500 p-6 text-center text-sm">
+            <p>Düzenlemek için ekrana bir kıyafet ekleyin ve üzerine tıklayın.</p>
+          </aside>
+        )}
+      </main>
     </div>
-
-    <script>
-        // --- AYARLAR & DEĞİŞKENLER ---
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const loadingScreen = document.getElementById('loadingScreen');
-        const loadingText = document.getElementById('loadingText');
-        const mainText = document.getElementById('mainText');
-        const subText = document.getElementById('subText');
-        const hud = document.getElementById('hud');
-        const infoPanel = document.getElementById('infoPanel');
-        
-        let objectModel = null;
-        let faceModel = null;
-        let currentMode = 'object';
-        let threshold = 100;
-        
-        // Kamera Ayarları
-        let facingMode = 'environment'; // Varsayılan: Arka Kamera
-        let stream = null;
-
-        // Yüz Analizi için
-        let lastFaceX = 0, lastFaceY = 0;
-        let movementScores = [];
-
-        const translate = { 'person': 'İnsan', 'car': 'Araba', 'cup': 'Bardak', 'cell phone': 'Telefon', 'laptop': 'PC', 'cat': 'Kedi', 'dog': 'Köpek' };
-
-        // --- BAŞLATMA ---
-        async function init() {
-            await setupCamera();
-            
-            loadingText.innerText = "Beyin Yükleniyor (Coco-SSD)...";
-            objectModel = await cocoSsd.load();
-            
-            loadingText.innerText = "Yüz Taraması Yükleniyor (Blazeface)...";
-            faceModel = await blazeface.load();
-            
-            startGPS();
-            loadingScreen.style.display = 'none';
-            loop();
-        }
-
-        // --- KAMERA YÖNETİMİ (GÜNCELLENDİ) ---
-        async function setupCamera() {
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: facingMode }, audio: false
-                });
-                video.srcObject = stream;
-                return new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        video.play();
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        resolve();
-                    };
-                });
-            } catch (e) { 
-                alert("Kamera hatası: " + e.message); 
-            }
-        }
-
-        async function switchCamera() {
-            facingMode = facingMode === 'user' ? 'environment' : 'user';
-            loadingScreen.style.display = 'flex';
-            loadingText.innerText = "Kamera Değiştiriliyor...";
-            await setupCamera();
-            loadingScreen.style.display = 'none';
-            
-            // Ön kameraya geçince otomatik YÜZ modunu açalım, havalı olsun
-            if(facingMode === 'user') setMode('emotion');
-        }
-
-        // --- ANA DÖNGÜ ---
-        async function loop() {
-            // Canvas temizle (Grain hariç)
-            if(currentMode !== 'grain') ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Modları Çalıştır
-            if (currentMode === 'object') await runObjectDetection();
-            else if (currentMode === 'emotion') await runFaceAnalysis(); 
-            else if (currentMode === 'grain') runGrainCounter();
-            else if (currentMode === 'road') await runRoadMode();
-            else if (currentMode === 'crypto') runCryptoAnalysis();
-
-            requestAnimationFrame(loop);
-        }
-
-        // --- 1. IRON MAN YÜZ ANALİZİ (SİBER MASKE) ---
-        async function runFaceAnalysis() {
-            const predictions = await faceModel.estimateFaces(video, false);
-
-            if (predictions.length > 0) {
-                const face = predictions[0];
-                const start = face.topLeft;
-                const end = face.bottomRight;
-                const size = [end[0] - start[0], end[1] - start[1]];
-                
-                // Çizim Stili: Neon Cyan
-                ctx.strokeStyle = 'cyan';
-                ctx.fillStyle = 'cyan';
-                ctx.lineWidth = 2;
-
-                // 1. Ana Çerçeve (Köşeli Cyberpunk stil)
-                drawBracket(start[0], start[1], size[0], size[1]);
-
-                // 2. SİBER AĞ (Landmarks Bağlantıları)
-                // Blazeface Noktaları: 0:SağGöz, 1:SolGöz, 2:Burun, 3:Ağız, 4:SağKulak, 5:SolKulak
-                const lm = face.landmarks;
-                
-                // Gözler arası çizgi
-                ctx.beginPath();
-                ctx.moveTo(lm[0][0], lm[0][1]); // Sağ Göz
-                ctx.lineTo(lm[2][0], lm[2][1]); // Burun
-                ctx.lineTo(lm[1][0], lm[1][1]); // Sol Göz
-                ctx.stroke();
-
-                // Burundan Ağza çizgi (T şekli)
-                ctx.beginPath();
-                ctx.moveTo(lm[2][0], lm[2][1]); // Burun
-                ctx.lineTo(lm[3][0], lm[3][1]); // Ağız
-                ctx.stroke();
-
-                // Noktaları parlat
-                lm.forEach(p => {
-                    ctx.beginPath();
-                    ctx.arc(p[0], p[1], 3, 0, 2 * Math.PI);
-                    ctx.fill();
-                });
-
-                // 3. Stres Analizi (Hareket)
-                const centerX = start[0] + size[0]/2;
-                const centerY = start[1] + size[1]/2;
-                const diff = Math.abs(centerX - lastFaceX) + Math.abs(centerY - lastFaceY);
-                lastFaceX = centerX; lastFaceY = centerY;
-                
-                movementScores.push(diff);
-                if (movementScores.length > 20) movementScores.shift();
-                const avgMove = movementScores.reduce((a,b)=>a+b,0) / movementScores.length;
-
-                // Durum Yazısı
-                let status = "KİMLİK: DOĞRULANDI";
-                let color = "cyan";
-                if (avgMove > 3.0) { status = "DİKKAT: YÜKSEK STRES"; color = "red"; }
-
-                ctx.font = "14px Courier New";
-                ctx.fillStyle = color;
-                ctx.fillText(status, start[0], start[1] - 15);
-                
-                mainText.innerText = status;
-                mainText.style.color = color;
-                subText.innerText = `Biyo-İzleme Aktif | Veri: ${avgMove.toFixed(1)}`;
-
-            } else {
-                mainText.innerText = "KİMLİK ARANIYOR...";
-                mainText.style.color = "white";
-                subText.innerText = "Yüze Odaklanın";
-            }
-        }
-        
-        function drawBracket(x, y, w, h) {
-            const len = w * 0.2;
-            ctx.beginPath();
-            // Sol Üst
-            ctx.moveTo(x, y + len); ctx.lineTo(x, y); ctx.lineTo(x + len, y);
-            // Sağ Üst
-            ctx.moveTo(x + w - len, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + len);
-            // Sağ Alt
-            ctx.moveTo(x + w, y + h - len); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - len, y + h);
-            // Sol Alt
-            ctx.moveTo(x + len, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - len);
-            ctx.stroke();
-        }
-
-        // --- 2. DİĞER MODLAR ---
-        async function runObjectDetection() {
-            const p = await objectModel.detect(video);
-            p.forEach(pred => {
-                const [x, y, w, h] = pred.bbox;
-                const name = translate[pred.class] || pred.class;
-                
-                ctx.strokeStyle = '#0f0'; 
-                ctx.lineWidth = 2;
-                ctx.strokeRect(x, y, w, h);
-                
-                // İsim etiketi arkası
-                ctx.fillStyle = 'rgba(0, 255, 0, 0.2)';
-                ctx.fillRect(x, y-20, ctx.measureText(name).width + 10, 20);
-                
-                ctx.fillStyle = '#fff'; 
-                ctx.fillText(name, x+5, y - 5);
-            });
-            mainText.innerText = `${p.length} OBJE`; mainText.style.color = "#0f0";
-        }
-
-        async function runRoadMode() {
-            const p = await objectModel.detect(video);
-            const vehicles = p.filter(i => ['car', 'truck', 'bus'].includes(i.class));
-            let danger = false;
-            vehicles.forEach(v => {
-                const [x, y, w, h] = v.bbox;
-                // Mesafe Algısı: Ekranın %15'inden büyükse yakındır
-                if (w*h > canvas.width*canvas.height*0.15) danger = true;
-                
-                ctx.strokeStyle = danger ? 'red' : 'cyan';
-                ctx.lineWidth = 3;
-                ctx.strokeRect(x, y, w, h);
-            });
-            mainText.innerText = danger ? "⚠️ ÇARPIŞMA RİSKİ" : "GÜVENLİ SÜRÜŞ";
-            mainText.style.color = danger ? "red" : "cyan";
-            hud.style.borderColor = danger ? "red" : "cyan";
-        }
-
-        function runCryptoAnalysis() {
-            // Orta nokta renk analizi
-            const cx = canvas.width/2, cy = canvas.height/2;
-            const size = 100;
-            const data = ctx.getImageData(cx-size/2, cy-size/2, size, size).data;
-            let g=0, r=0;
-            
-            for(let i=0; i<data.length; i+=4) {
-                if(data[i+1] > data[i]+20) g++; // Yeşil baskın
-                if(data[i] > data[i+1]+20) r++; // Kırmızı baskın
-            }
-            
-            ctx.strokeStyle = 'gold'; 
-            ctx.lineWidth = 2;
-            ctx.strokeRect(cx-size/2, cy-size/2, size, size);
-            
-            if(g+r > 50) { // Yeterli renk verisi varsa
-                const signal = g > r ? "SİNYAL: AL (LONG)" : "SİNYAL: SAT (SHORT)";
-                const color = g > r ? "#0f0" : "#f00";
-                mainText.innerText = signal; mainText.style.color = color;
-            } else {
-                mainText.innerText = "GRAFİK TARANIYOR..."; mainText.style.color = "gold";
-            }
-        }
-
-        function runGrainCounter() {
-            // Siyah/Beyaz Eşikleme ile sayım
-            const size = 200, sx = (canvas.width-size)/2, sy = (canvas.height-size)/2;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            const frame = ctx.getImageData(sx, sy, size, size);
-            const data = frame.data;
-            const bin = new Uint8Array(size*size);
-            let pixels = 0;
-
-            for(let i=0; i<data.length; i+=4) {
-                const b = (data[i]+data[i+1]+data[i+2])/3;
-                // Eşik değerinin altındaysa (koyu renk) işaretle
-                if(b < threshold) { 
-                    bin[i/4]=1; pixels++;
-                    data[i]=255; data[i+1]=0; data[i+2]=255; // Magenta boya
-                }
-            }
-            ctx.putImageData(frame, sx, sy);
-            ctx.strokeStyle = 'magenta'; ctx.strokeRect(sx, sy, size, size);
-            
-            // 80 piksel = 1 ortalama çekirdek kabulü
-            const estCount = Math.floor(pixels / 80); 
-            mainText.innerText = `ADET: ${estCount}`; mainText.style.color = "magenta";
-        }
-
-        // --- YARDIMCILAR ---
-        function setMode(mode) {
-            currentMode = mode;
-            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById(`btn-${mode}`).classList.add('active');
-            
-            // UI Reset
-            hud.className = 'hud-overlay';
-            document.getElementById('speedometer').style.display = 'none';
-            document.getElementById('grainControls').style.display = 'none';
-            document.getElementById('crosshair').style.display = 'block';
-            infoPanel.style.borderColor = '#0f0';
-            
-            if(mode==='emotion') { 
-                hud.classList.add('emotion-hud'); 
-                infoPanel.style.borderColor='cyan'; 
-            }
-            else if(mode==='grain') { 
-                hud.classList.add('grain-hud'); 
-                document.getElementById('grainControls').style.display='block'; 
-                infoPanel.style.borderColor='magenta'; 
-            }
-            else if(mode==='road') { 
-                hud.classList.add('road-hud'); 
-                document.getElementById('speedometer').style.display='block'; 
-                document.getElementById('crosshair').style.display='none'; 
-                infoPanel.style.borderColor='red'; 
-            }
-            else if(mode==='crypto') { 
-                hud.classList.add('crypto-hud'); 
-                infoPanel.style.borderColor='gold'; 
-            }
-        }
-
-        function updateThreshold(v) { threshold = parseInt(v); document.getElementById('threshVal').innerText = v; }
-        
-        function startGPS() {
-            if ("geolocation" in navigator) navigator.geolocation.watchPosition(p => {
-                document.getElementById('speedVal').innerText = Math.round((p.coords.speed||0)*3.6);
-            }, null, {enableHighAccuracy:true});
-        }
-
-        init();
-    </script>
-</body>
-</html>
+  );
+}
