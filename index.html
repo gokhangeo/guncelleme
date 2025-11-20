@@ -1,307 +1,408 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Camera, Download, X, Move, RotateCw, ZoomIn, Shirt, Layers, Sparkles, Scissors } from 'lucide-react';
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mersin Kadastro & TKGM Paneli</title>
+    
+    <!-- Leaflet Harita Motoru -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- İkonlar -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-export default function App() {
-  // Durum yönetimi (State)
-  const [baseImage, setBaseImage] = useState(null);
-  const [overlays, setOverlays] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  
-  // Canvas referansı
-  const containerRef = useRef(null);
-
-  // Örnek kıyafet/aksesuar veritabanı (SVG Placeholderlar)
-  const defaultItems = [
-    { type: 'sunglasses', label: 'Güneş Gözlüğü', icon: '🕶️' },
-    { type: 'hat', label: 'Şapka', icon: '🧢' },
-    { type: 'shirt', label: 'Tişört', icon: '👕' },
-    { type: 'necklace', label: 'Kolye', icon: '📿' },
-  ];
-
-  // Resim Yükleme
-  const handleImageUpload = (e, type) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (type === 'base') {
-          setBaseImage(event.target.result);
-        } else {
-          addOverlay(event.target.result, 'custom');
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
+        #map { height: 100vh; width: 100%; z-index: 1; }
+        
+        /* Sol Kontrol Paneli */
+        #control-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.96);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            z-index: 1000;
+            width: 360px;
+            border-left: 6px solid #c0392b; /* Kadastro Kırmızısı */
         }
-      };
-      reader.readAsDataURL(file);
-    }
-  };
 
-  // Katman Ekleme
-  const addOverlay = (src, type) => {
-    const newOverlay = {
-      id: Date.now(),
-      src: src,
-      type: type,
-      x: 50, // Başlangıç X (yüzde)
-      y: 50, // Başlangıç Y (yüzde)
-      scale: 1,
-      rotation: 0,
-    };
-    setOverlays([...overlays, newOverlay]);
-    setSelectedId(newOverlay.id);
-  };
+        h2 { margin: 0 0 15px 0; color: #2c3e50; font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+        
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 600; color: #34495e; font-size: 13px; }
+        
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #bdc3c7;
+            border-radius: 6px;
+            font-size: 14px;
+            background-color: #fff;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        select:focus { border-color: #c0392b; box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.1); outline: none; }
 
-  // SVG oluşturucu (Demo amaçlı placeholder görseller)
-  const createSvgUrl = (emoji) => {
-    const svgString = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
-        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="80">${emoji}</text>
-      </svg>
-    `;
-    return `data:image/svg+xml;base64,${btoa(decodeURIComponent(encodeURIComponent(svgString)))}`;
-  };
+        /* Bilgi Kartı */
+        #info-card {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+            display: none;
+            animation: slideDown 0.4s ease;
+        }
 
-  // Seçili öğeyi güncelleme
-  const updateSelected = (prop, value) => {
-    setOverlays(overlays.map(item => 
-      item.id === selectedId ? { ...item, [prop]: value } : item
-    ));
-  };
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
-  // Sürükleme Mantığı
-  const handleMouseDown = (e, id) => {
-    e.stopPropagation();
-    setSelectedId(id);
-    setIsDragging(true);
-    
-    const item = overlays.find(o => o.id === id);
-    const containerRect = containerRef.current.getBoundingClientRect();
-    
-    // Mouse pozisyonunu yüzdeye çevir
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        .neighborhood-title { font-size: 16px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+        
+        .stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .stat-label { font-size: 13px; color: #7f8c8d; }
+        .stat-value { font-size: 15px; font-weight: bold; color: #2c3e50; }
+        .highlight { color: #c0392b; font-size: 18px; }
 
-    setDragOffset({
-      x: clientX - (containerRect.left + (containerRect.width * item.x / 100)),
-      y: clientY - (containerRect.top + (containerRect.height * item.y / 100))
-    });
-  };
+        /* Butonlar */
+        .btn-tkgm {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            background-color: #16a085;
+            color: white;
+            text-align: center;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            transition: background 0.3s;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-tkgm:hover { background-color: #138d75; }
 
-  const handleMouseMove = (e) => {
-    if (!isDragging || !selectedId) return;
+        .btn-google {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-top: 8px;
+            background-color: #4285F4;
+            color: white;
+            text-align: center;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 13px;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-google:hover { background-color: #357ae8; }
 
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        .btn-reset {
+            margin-top: 15px;
+            width: 100%;
+            padding: 10px;
+            background-color: #95a5a6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn-reset:hover { background-color: #7f8c8d; }
+        
+        .total-count {
+            text-align: right;
+            font-size: 11px;
+            color: #7f8c8d;
+            margin-top: 5px;
+            font-style: italic;
+        }
 
-    // Yeni pozisyonu hesapla (yüzde olarak)
-    let newX = ((clientX - dragOffset.x) - containerRect.left) / containerRect.width * 100;
-    let newY = ((clientY - dragOffset.y) - containerRect.top) / containerRect.height * 100;
+    </style>
+</head>
+<body>
 
-    setOverlays(overlays.map(item => 
-      item.id === selectedId ? { ...item, x: newX, y: newY } : item
-    ));
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  // Klavye ile silme
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Delete' && selectedId) {
-        setOverlays(overlays.filter(o => o.id !== selectedId));
-        setSelectedId(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, overlays]);
-
-  return (
-    <div 
-      className="flex flex-col h-screen bg-slate-900 text-white font-sans"
-      onMouseMove={handleMouseMove}
-      onTouchMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onTouchEnd={handleMouseUp}
-    >
-      {/* Header */}
-      <header className="bg-slate-950 p-4 border-b border-slate-800 flex justify-between items-center shadow-lg z-20">
-        <div className="flex items-center gap-2">
-          <div className="bg-indigo-600 p-2 rounded-lg">
-            <Sparkles className="w-6 h-6 text-white" />
-          </div>
-          <h1 className="text-xl font-bold tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400">
-            MODA AI STÜDYOSU
-          </h1>
+    <div id="control-panel">
+        <h2><i class="fa-solid fa-layer-group"></i> Kadastro Paneli</h2>
+        
+        <div class="form-group">
+            <label>İlçe Seçimi</label>
+            <select id="districtSelect" onchange="filterNeighborhoods()">
+                <option value="all">Yükleniyor...</option>
+            </select>
         </div>
-        <button className="bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-full text-sm font-medium transition flex items-center gap-2">
-          <Download size={16} /> Kaydet
-        </button>
-      </header>
 
-      <main className="flex-1 flex overflow-hidden">
-        {/* Sol Panel: Araçlar */}
-        <aside className="w-64 bg-slate-900 border-r border-slate-800 p-4 flex flex-col gap-6 overflow-y-auto z-10 shadow-xl">
-          
-          {/* Ana Resim Yükleme */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Model</h3>
-            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-700 rounded-xl hover:border-indigo-500 hover:bg-slate-800 transition cursor-pointer group">
-              <Camera className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 mb-2" />
-              <span className="text-xs text-slate-400 group-hover:text-white">Fotoğraf Yükle</span>
-              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'base')} />
-            </label>
-          </div>
+        <div class="form-group">
+            <label>Mahalle Seçimi</label>
+            <select id="neighborhoodSelect" onchange="zoomToLocation()" disabled>
+                <option value="">Önce İlçe Seçiniz</option>
+            </select>
+            <div class="total-count" id="totalUnitCount">Toplam: 54 Birim</div>
+        </div>
 
-          {/* Gardırop */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Gardırop</h3>
-            <div className="grid grid-cols-2 gap-2">
-              {defaultItems.map((item, idx) => (
-                <button 
-                  key={idx}
-                  onClick={() => addOverlay(createSvgUrl(item.icon), 'preset')}
-                  className="bg-slate-800 hover:bg-slate-700 p-3 rounded-lg flex flex-col items-center gap-2 transition border border-slate-700 hover:border-indigo-500"
-                >
-                  <div className="text-2xl">{item.icon}</div>
-                  <span className="text-[10px] text-slate-300">{item.label}</span>
-                </button>
-              ))}
+        <div id="info-card">
+            <div class="neighborhood-title" id="cardTitle">Mahalle Adı</div>
+            
+            <div class="stat-row">
+                <span class="stat-label">İhale Durumu:</span>
+                <span class="stat-value" style="color:#27ae60;">Aktif <i class="fa-solid fa-check-circle"></i></span>
             </div>
-          </div>
-
-          {/* Özel Kıyafet Yükleme */}
-          <div className="space-y-2">
-             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Kendi Kıyafetin</h3>
-             <label className="flex items-center justify-center gap-2 w-full py-3 bg-slate-800 rounded-lg cursor-pointer hover:bg-slate-700 border border-slate-700 transition">
-                <Upload size={16} className="text-indigo-400"/>
-                <span className="text-xs">PNG Yükle</span>
-                <input type="file" className="hidden" accept="image/png,image/jpeg" onChange={(e) => handleImageUpload(e, 'overlay')} />
-             </label>
-          </div>
-        </aside>
-
-        {/* Orta Alan: Canvas */}
-        <section className="flex-1 bg-[#0f172a] relative overflow-hidden flex items-center justify-center p-8">
-          <div 
-            className="relative w-full h-full max-w-2xl max-h-[80vh] bg-slate-950 rounded-lg shadow-2xl overflow-hidden flex items-center justify-center border border-slate-800 select-none"
-            ref={containerRef}
-          >
-            {baseImage ? (
-              <img 
-                src={baseImage} 
-                alt="Base" 
-                className="absolute w-full h-full object-contain pointer-events-none"
-              />
-            ) : (
-              <div className="text-center p-10">
-                <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                   <Camera className="w-10 h-10 text-slate-600" />
-                </div>
-                <p className="text-slate-500 text-lg">Başlamak için bir fotoğraf yükleyin</p>
-              </div>
-            )}
-
-            {/* Katmanlar */}
-            {overlays.map((item) => (
-              <div
-                key={item.id}
-                onMouseDown={(e) => handleMouseDown(e, item.id)}
-                onTouchStart={(e) => handleMouseDown(e, item.id)}
-                style={{
-                  position: 'absolute',
-                  left: `${item.x}%`,
-                  top: `${item.y}%`,
-                  transform: `translate(-50%, -50%) scale(${item.scale}) rotate(${item.rotation}deg)`,
-                  cursor: isDragging && selectedId === item.id ? 'grabbing' : 'grab',
-                  zIndex: selectedId === item.id ? 50 : 10,
-                }}
-                className={`group ${selectedId === item.id ? 'ring-2 ring-indigo-500 rounded-lg' : ''}`}
-              >
-                <img 
-                  src={item.src} 
-                  alt="Overlay" 
-                  className="pointer-events-none max-w-[200px] max-h-[200px]" 
-                  style={{ filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }}
-                />
-                
-                {selectedId === item.id && (
-                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition">
-                    Taşı
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Sağ Panel: Kontrol */}
-        {selectedId ? (
-          <aside className="w-72 bg-slate-900 border-l border-slate-800 p-6 flex flex-col gap-6 z-10 shadow-xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-              <h2 className="font-bold text-indigo-400 flex items-center gap-2">
-                <Layers size={18} />
-                Düzenle
-              </h2>
-              <button 
-                onClick={() => {
-                  setOverlays(overlays.filter(o => o.id !== selectedId));
-                  setSelectedId(null);
-                }}
-                className="text-red-400 hover:text-red-300 transition"
-              >
-                <Scissors size={18} />
-              </button>
+            
+            <div class="stat-row">
+                <span class="stat-label">İşlem Görecek Parsel:</span>
+                <span class="stat-value highlight" id="cardParcels">0</span>
             </div>
 
-            <div className="space-y-6">
-              {/* Büyütme */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs text-slate-400">
-                  <span className="flex items-center gap-1"><ZoomIn size={12}/> Boyut</span>
-                  <span>{overlays.find(o => o.id === selectedId).scale.toFixed(1)}x</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="0.1" 
-                  max="3" 
-                  step="0.1" 
-                  value={overlays.find(o => o.id === selectedId).scale}
-                  onChange={(e) => updateSelected('scale', parseFloat(e.target.value))}
-                  className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                />
-              </div>
+            <button onclick="openTKGM()" class="btn-tkgm">
+                <i class="fa-solid fa-building-columns"></i> TKGM Parsel Sorgu
+            </button>
+            
+            <button onclick="openGoogleMaps()" class="btn-google">
+                <i class="fa-solid fa-diamond-turn-right"></i> Yol Tarifi Al
+            </button>
+        </div>
 
-              {/* Döndürme */}
-              <div className="space-y-2">
-                 <div className="flex justify-between text-xs text-slate-400">
-                  <span className="flex items-center gap-1"><RotateCw size={12}/> Döndür</span>
-                  <span>{overlays.find(o => o.id === selectedId).rotation}°</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="0" 
-                  max="360" 
-                  value={overlays.find(o => o.id === selectedId).rotation}
-                  onChange={(e) => updateSelected('rotation', parseInt(e.target.value))}
-                  className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                />
-              </div>
-            </div>
-
-            <div className="mt-auto p-4 bg-slate-800 rounded-lg text-xs text-slate-400 leading-relaxed">
-              <p>💡 <strong>İpucu:</strong> Kıyafeti hareket ettirmek için üzerine basılı tut ve sürükle.</p>
-            </div>
-          </aside>
-        ) : (
-          <aside className="w-72 bg-slate-900 border-l border-slate-800 flex items-center justify-center text-slate-500 p-6 text-center text-sm">
-            <p>Düzenlemek için ekrana bir kıyafet ekleyin ve üzerine tıklayın.</p>
-          </aside>
-        )}
-      </main>
+        <button class="btn-reset" onclick="resetMap()">Genel Haritaya Dön</button>
     </div>
-  );
-}
+
+    <div id="map"></div>
+
+    <script>
+        // --- MÜDÜRÜM, İŞTE 54 BİRİMLİK TAM LİSTE ---
+        // Koordinatlar köy merkezlerine (Cami/Okul yanlarına) sabitlendi.
+        const locations = [
+            // --- ANAMUR (22 Adet) ---
+            { district: "Anamur", name: "Aşağıkükür", lat: 36.1970, lon: 32.7750, parcels: 380 },
+            { district: "Anamur", name: "Bozdoğan", lat: 36.1325, lon: 32.9102, parcels: 477 }, 
+            { district: "Anamur", name: "Boğuntu", lat: 36.1936, lon: 32.7650, parcels: 376 },
+            { district: "Anamur", name: "Çamlıpınar", lat: 36.1553, lon: 32.9301, parcels: 666 },
+            { district: "Anamur", name: "Çamlıpınaralanı", lat: 36.0400, lon: 32.7400, parcels: 188 },
+            { district: "Anamur", name: "Çataloluk", lat: 36.1854, lon: 32.8452, parcels: 374 },
+            { district: "Anamur", name: "Çukurabanoz", lat: 36.2251, lon: 32.7843, parcels: 1837 },
+            { district: "Anamur", name: "Demirören", lat: 36.0485, lon: 32.8951, parcels: 1650 },
+            { district: "Anamur", name: "Güngören", lat: 36.1422, lon: 32.8735, parcels: 783 },
+            { district: "Anamur", name: "Kalınören", lat: 36.0851, lon: 32.8052, parcels: 472 },
+            { district: "Anamur", name: "Karaçukur", lat: 36.1725, lon: 32.8541, parcels: 1368 },
+            { district: "Anamur", name: "Karalarbahşiş", lat: 36.1082, lon: 32.8185, parcels: 495 },
+            { district: "Anamur", name: "Karaağa", lat: 36.1185, lon: 32.8341, parcels: 584 },
+            { district: "Anamur", name: "Korucuk", lat: 36.1012, lon: 32.8135, parcels: 624 },
+            { district: "Anamur", name: "Malaklar", lat: 36.1085, lon: 32.8532, parcels: 215 },
+            { district: "Anamur", name: "Nasrettin", lat: 36.1172, lon: 32.8425, parcels: 576 },
+            { district: "Anamur", name: "Ormancık", lat: 36.1531, lon: 32.9042, parcels: 60 },
+            { district: "Anamur", name: "Ortaköy", lat: 36.1345, lon: 32.8841, parcels: 825 },
+            { district: "Anamur", name: "Sugözü", lat: 36.3107, lon: 32.7688, parcels: 318 },
+            { district: "Anamur", name: "Sarıağaç", lat: 36.2045, lon: 32.8542, parcels: 119 },
+            { district: "Anamur", name: "Sarıdana", lat: 36.1932, lon: 32.8231, parcels: 333 },
+            { district: "Anamur", name: "Yukarıkükür", lat: 36.1725, lon: 32.8745, parcels: 836 },
+
+            // --- BOZYAZI (11 Adet) ---
+            // Not: Bahçekova ve Hacıbahattin listelerde genelde ayrıdır, burada ayrıştırıldı.
+            { district: "Bozyazı", name: "Bahçekova", lat: 36.1380, lon: 32.9720, parcels: 26 },
+            { district: "Bozyazı", name: "Hacıbahattin", lat: 36.1250, lon: 32.9650, parcels: 374 },
+            { district: "Bozyazı", name: "Beyreli", lat: 36.1452, lon: 32.9805, parcels: 378 },
+            { district: "Bozyazı", name: "Elmakuzu", lat: 36.3980, lon: 33.0300, parcels: 1091 },
+            { district: "Bozyazı", name: "Gözce", lat: 36.1055, lon: 33.0342, parcels: 571 },
+            { district: "Bozyazı", name: "Gözsüzce", lat: 36.1002, lon: 33.0145, parcels: 254 },
+            { district: "Bozyazı", name: "Kızılca", lat: 36.3100, lon: 33.0720, parcels: 1957 },
+            { district: "Bozyazı", name: "Kömürlü", lat: 36.1602, lon: 32.9505, parcels: 464 },
+            { district: "Bozyazı", name: "Lenger", lat: 36.1505, lon: 32.9601, parcels: 736 },
+            { district: "Bozyazı", name: "Tekedüzü", lat: 36.1302, lon: 32.9905, parcels: 15 },
+            { district: "Bozyazı", name: "Dereköy", lat: 36.1705, lon: 33.0001, parcels: 1200 },
+
+            // --- GÜLNAR (3 Adet) ---
+            { district: "Gülnar", name: "Büyükeceli", lat: 36.1695, lon: 33.5566, parcels: 1458 },
+            { district: "Gülnar", name: "Şeyhömer", lat: 36.3451, lon: 33.4155, parcels: 3029 },
+            { district: "Gülnar", name: "Zeyne (Sütlüce)", lat: 36.4255, lon: 33.5051, parcels: 3524 },
+
+            // --- SİLİFKE (18 Adet) ---
+            { district: "Silifke", name: "Altınkum", lat: 36.3052, lon: 34.0555, parcels: 1628 },
+            { district: "Silifke", name: "Arkum", lat: 36.3508, lon: 34.0571, parcels: 3693 },
+            { district: "Silifke", name: "Atik", lat: 36.4121, lon: 33.9025, parcels: 133 },
+            { district: "Silifke", name: "Boynuinceli", lat: 36.5525, lon: 33.9521, parcels: 232 },
+            { district: "Silifke", name: "Burunucu", lat: 36.3552, lon: 33.9845, parcels: 731 },
+            { district: "Silifke", name: "Çeltikçi", lat: 36.3925, lon: 33.9122, parcels: 134 },
+            { district: "Silifke", name: "Çilbayır", lat: 36.3719, lon: 33.6892, parcels: 122 },
+            { district: "Silifke", name: "Gülempaşalı", lat: 36.4045, lon: 33.9241, parcels: 487 },
+            { district: "Silifke", name: "Hırmanlı", lat: 36.2120, lon: 33.6280, parcels: 177 },
+            { district: "Silifke", name: "İmamuşağı", lat: 36.4545, lon: 33.7542, parcels: 1083 },
+            { district: "Silifke", name: "Kavak", lat: 36.4252, lon: 33.8555, parcels: 1215 },
+            { district: "Silifke", name: "Kurtuluş", lat: 36.3851, lon: 33.9452, parcels: 2980 },
+            { district: "Silifke", name: "Mara", lat: 36.4755, lon: 33.9851, parcels: 1087 },
+            { district: "Silifke", name: "Nasrullah", lat: 36.4352, lon: 33.9645, parcels: 281 },
+            { district: "Silifke", name: "Seydili", lat: 36.4455, lon: 33.9041, parcels: 318 },
+            { district: "Silifke", name: "Söken", lat: 36.3052, lon: 34.0055, parcels: 1057 },
+            { district: "Silifke", name: "Ulugöz", lat: 36.3655, lon: 33.9552, parcels: 965 },
+            { district: "Silifke", name: "Yeğenli", lat: 36.4551, lon: 33.8852, parcels: 3477 }
+        ];
+
+        // --- HARİTA VE LEAFLET AYARLARI ---
+        const googleHybrid = L.tileLayer('http://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
+            maxZoom: 21,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            attribution: 'Mersin Kadastro'
+        });
+
+        const map = L.map('map', {
+            center: [36.400, 33.500],
+            zoom: 9,
+            layers: [googleHybrid],
+            zoomControl: false
+        });
+        
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        let markers = [];
+        let currentSelectedLocation = null;
+
+        function initApp() {
+            populateDistrictSelect();
+            initMarkers();
+            
+            // Toplam birim sayısını kontrol et
+            document.getElementById("totalUnitCount").innerText = `Toplam: ${locations.length} Birim`;
+        }
+
+        function populateDistrictSelect() {
+            const select = document.getElementById("districtSelect");
+            const counts = {};
+            locations.forEach(loc => counts[loc.district] = (counts[loc.district] || 0) + 1);
+
+            select.innerHTML = `<option value="all">Tüm İlçeler (${locations.length} Birim)</option>`;
+            Object.keys(counts).sort().forEach(district => {
+                const option = document.createElement("option");
+                option.value = district;
+                option.text = `${district} (${counts[district]} Mahalle)`;
+                select.appendChild(option);
+            });
+        }
+
+        function initMarkers() {
+            locations.forEach(loc => {
+                // İlçe Renkleri
+                let color = "#3498db";
+                if(loc.district === "Anamur") color = "#e74c3c"; // Kırmızı
+                if(loc.district === "Bozyazı") color = "#2ecc71"; // Yeşil
+                if(loc.district === "Gülnar") color = "#9b59b6"; // Mor
+                if(loc.district === "Silifke") color = "#f1c40f"; // Sarı
+
+                // Circle Marker
+                const marker = L.circleMarker([loc.lat, loc.lon], {
+                    color: "#fff",
+                    weight: 1,
+                    fillColor: color,
+                    fillOpacity: 0.9,
+                    radius: 7
+                }).addTo(map);
+
+                // Popup Bilgisi
+                marker.bindPopup(`
+                    <div style="text-align:center; font-family:sans-serif;">
+                        <strong style="color:${color}">${loc.district}</strong><br>
+                        <b>${loc.name}</b><br>
+                        <span style="font-size:11px; color:#333">Parsel: ${loc.parcels}</span>
+                    </div>
+                `);
+
+                // Tıklama
+                marker.on('click', () => {
+                    const distSel = document.getElementById("districtSelect");
+                    if(distSel.value !== loc.district) {
+                        distSel.value = loc.district;
+                        filterNeighborhoods();
+                    }
+                    const neighSel = document.getElementById("neighborhoodSelect");
+                    Array.from(neighSel.options).forEach(opt => {
+                        if(opt.text === loc.name) neighSel.value = opt.value;
+                    });
+                    selectLocationData(loc);
+                });
+
+                markers.push({ ...loc, marker: marker });
+            });
+        }
+
+        function filterNeighborhoods() {
+            const districtSelect = document.getElementById("districtSelect");
+            const neighborhoodSelect = document.getElementById("neighborhoodSelect");
+            const selectedDistrict = districtSelect.value;
+
+            neighborhoodSelect.innerHTML = '<option value="">Mahalle Seçiniz...</option>';
+            neighborhoodSelect.disabled = false;
+
+            const filtered = locations.filter(loc => selectedDistrict === "all" || loc.district === selectedDistrict);
+            filtered.sort((a, b) => a.name.localeCompare(b.name));
+
+            filtered.forEach(loc => {
+                const option = document.createElement("option");
+                option.value = JSON.stringify(loc);
+                option.text = loc.name;
+                neighborhoodSelect.appendChild(option);
+            });
+
+            if(selectedDistrict === "all") {
+                resetMap();
+            } else {
+                const group = new L.featureGroup(markers.filter(m => m.district === selectedDistrict).map(m => m.marker));
+                map.fitBounds(group.getBounds(), { padding: [50,50] });
+            }
+        }
+
+        function zoomToLocation() {
+            const select = document.getElementById("neighborhoodSelect");
+            if (!select.value) return;
+            const data = JSON.parse(select.value);
+            selectLocationData(data);
+        }
+
+        function selectLocationData(data) {
+            currentSelectedLocation = data;
+            
+            document.getElementById("cardTitle").innerText = `${data.district} - ${data.name}`;
+            document.getElementById("cardParcels").innerText = data.parcels;
+            document.getElementById("info-card").style.display = "block";
+
+            // ODAKLANMA: Zoom 17 (Köyiçi/Meydan Detayı)
+            map.flyTo([data.lat, data.lon], 17, {
+                animate: true,
+                duration: 1.5
+            });
+
+            const target = markers.find(m => m.name === data.name && m.district === data.district);
+            if(target) target.marker.openPopup();
+        }
+
+        function openTKGM() {
+            window.open("https://parselsorgu.tkgm.gov.tr/", '_blank');
+        }
+
+        function openGoogleMaps() {
+            if(!currentSelectedLocation) return;
+            window.open(`https://www.google.com/maps/dir/?api=1&destination=${currentSelectedLocation.lat},${currentSelectedLocation.lon}`, '_blank');
+        }
+
+        function resetMap() {
+            map.flyTo([36.400, 33.500], 9);
+            document.getElementById("districtSelect").value = "all";
+            document.getElementById("neighborhoodSelect").innerHTML = '<option value="">Önce İlçe Seçiniz</option>';
+            document.getElementById("neighborhoodSelect").disabled = true;
+            document.getElementById("info-card").style.display = "none";
+            map.closePopup();
+        }
+
+        initApp();
+
+    </script>
+</body>
+</html>
